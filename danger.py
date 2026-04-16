@@ -146,21 +146,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-tion)
 
-        # Start monitoring in background
-        asyncio.create_task(monitor_attack(chat_id, duration))
-
-    except Exception as e:
-        logging.error(f"Attack failed: {str(e)}")
-        bot.send_message(
-            chat_id,
-            "*❌ Attack Failed!*\n\n*Please try again later.*",
-            parse_mode='Markdown',
-            reply_markup=create_inline_keyboard()
-        )
-        with attack_lock:
-            attack_in_progress = False
 
 @bot.message_handler(commands=['attack'])
 def handle_attack_command(message):
