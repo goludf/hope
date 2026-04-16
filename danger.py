@@ -146,7 +146,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-tion))
+tion)
 
         # Start monitoring in background
         asyncio.create_task(monitor_attack(chat_id, duration))
