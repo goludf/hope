@@ -34,7 +34,7 @@ except Exception as e:
 
 active_attacks = [] 
 attack_lock = Lock()
-DEFAULT_THREADS = 1500 
+DEFAULT_THREADS = 500 
 
 # --- HELPERS ---
 def get_user_role(user_id):
