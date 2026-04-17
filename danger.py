@@ -16,7 +16,7 @@ attack_loop = asyncio.new_event_loop()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- CONFIGURATION ---
-TOKEN = '8754814217:AAEIszWu7k_J3-7qivDV21i4B4i5Bq2bmw4'
+TOKEN = '8754814217:AAGsw_xqtSmILs08l91n1l6rD8nOuSsO60o'
 MONGO_URI = 'mongodb+srv://ddos62366_db_user:cYaNxOHsNl5mpvA8@cluster0.1bfayzm.mongodb.net/?appName=Cluster0'
 PRIMARY_ADMIN = 8318925500 
 BINARY_NAME = "./bgmi"
